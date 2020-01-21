@@ -84,6 +84,7 @@ void multiplyAddKronecker(
     int bncols,
     double *c)
 {
+#ifdef BASIC
   for (int ja = 0; ja < ancols; ja++) {
     for (int ia = 0; ia < anrows; ia++) {
       double aelem = a[ia + ja * anrows];
@@ -96,6 +97,25 @@ void multiplyAddKronecker(
       }
     }
   }
+#else
+  size_t shift_an_bn = (size_t)(anrows * bnrows);
+  size_t shift_bn    = (size_t)(bnrows * bncols);
+  for (int ja = 0; ja < ancols; ja++) {
+    for (int ia = 0; ia < anrows; ia++) {
+      double aelem = a[ia + ja * anrows];
+      size_t shift_an = (size_t)(ia + ja * anrows);
+      size_t shift_c  = shift_an * shift_bn;
+      for (int jb = 0; jb < bncols; jb++) {
+        for (int ib = 0; ib < bnrows; ib++) {
+          double belem = b[ib + jb * bnrows];
+          // size_t cElemIdx = (ia + ja * anrows) * (size_t)(bnrows * bncols) + ib + jb * (size_t)(anrows * bnrows);
+          size_t cElemIdx = shift_c + ib + jb * shift_an_bn;
+          c[cElemIdx] += aelem * belem;
+        }
+      }
+    }
+  }
+#endif//BASIC
 }
 
 void multiplyTTMatVec(
