@@ -95,14 +95,14 @@ int compareTTVec(
   double sqError = 0.0;
   double normX = 0.0;
   double normY = 0.0;
-  for (size_t i = 0, ie = x->dimVecBegin[x->d]; i < ie; i++) { 
+  for (size_t i = 0, ie = x->dimVecBegin[x->d]; i < ie; i++) {
     double diff = x->data[i] - y->data[i];
     sqError += diff * diff;
     normX += x->data[i] * x->data[i];
     normY += y->data[i] * y->data[i];
   }
   double maxNorm = fabs(normX) > fabs(normY) ? fabs(normX) : fabs(normY);
-//  printf("error %e\n", sqError);
+  printf("error %e\n", sqError);
   if (maxNorm < 1e-6) { return (sqError < 1e-12); }
   else { return (sqError / maxNorm < 1e-6); }
 }

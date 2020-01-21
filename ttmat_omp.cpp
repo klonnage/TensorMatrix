@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstring>
 #include <omp.h>
+#include <mkl_cblas.h>
 #include "ttmat.h"
 
 void loadTTMat(
@@ -99,6 +100,30 @@ void multiplyAddKronecker(
   }
 }
 
+
+void multiplySetKronecker(
+    double *a,
+    int anrows,
+    int ancols,
+    double *b,
+    int bnrows,
+    int bncols,
+    double *c)
+{
+  for (int ja = 0; ja < ancols; ja++) {
+    for (int ia = 0; ia < anrows; ia++) {
+      double aelem = a[ia + ja * anrows];
+      for (int jb = 0; jb < bncols; jb++) {
+        for (int ib = 0; ib < bnrows; ib++) {
+          double belem = b[ib + jb * bnrows];
+          size_t cElemIdx = (ia + ja * anrows) * (size_t)(bnrows * bncols) + ib + jb * (size_t)(anrows * bnrows);
+          c[cElemIdx] = aelem * belem;
+        }
+      }
+    }
+  }
+}
+
 void multiplyTTMatVec(
     TTMat *A,
     TTVec *x,
@@ -119,28 +144,50 @@ void multiplyTTMatVec(
   y->data = (double *)malloc(y->dimVecBegin[y->d] * sizeof(y->data[0]));
   memset(y->data, 0, y->dimVecBegin[y->d] * sizeof(y->data[0]));
 
-  // Now perform the matrix-vector multiplication in each dimension
-  #ifdef OMP1
-  #pragma omp parallel for firstprivate(y, A, x) schedule(dynamic)
-  #endif
-  #ifdef OMP_TASK1
-  #pragma omp parallel
-  #pragma omp single
-  #endif
+
   for (int d = 0; d < y->d; d++) {
-    #ifdef OMP2
-    #pragma omp parallel for firstprivate(y, A, x, d) schedule(static)
-    #endif
-    for (int m = 0; m < A->m[d]; m++) {
-      double *ymBlockBegin = getTTVecBlock(y, d, m);
-      for (int n = 0; n < A->n[d]; n++) {
-        double *AmnBlockBegin = getTTMatBlock(A, d, m, n);
-        double *xnBlockBegin = getTTVecBlock(x, d, n);
-        #ifdef OMP_TASK1
-        #pragma omp task
-        #endif
-        multiplyAddKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], ymBlockBegin);
+    double*** tmp_kprod = (double***)malloc(A->m[d] * sizeof(double*));
+    //#pragma omp parallel shared(tmp_kprod)
+    {
+    //#pragma omp single
+    {
+      for (int m = 0; m < A->m[d]; m++) {
+        tmp_kprod[m] = (double**)malloc((A->n[d] + 1) * sizeof(double*));
+        tmp_kprod[m][0] = getTTVecBlock(y, d, m);
+        for (int n = 0; n < A->n[d]; n++) {
+        //#pragma omp task depend(out:tmp_kprod[m][n+1])
+        {
+          printf("y->r[d] : %d\n", y->r[d]);
+          tmp_kprod[m][n+1] == NULL;
+          tmp_kprod[m][n+1] = (double*)malloc(y->r[d] * sizeof(double));
+          if(tmp_kprod[m][n+1] == NULL) printf("NO\n");
+          printf("%p\n", tmp_kprod[m][n+1]);
+          double *AmnBlockBegin = getTTMatBlock(A, d, m, n);
+          double *xnBlockBegin = getTTVecBlock(x, d, n);
+          multiplySetKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], tmp_kprod[m][n+1]);
+          printf("%p OK\n", tmp_kprod[m][n+1]);
+        }
       }
     }
+    for (int m = 0; m < A->m[d]; m++) {
+      for (int n = (A->n[d] + 2) / 2; n > 1; n /= 2) {
+        for(int i = 0; i < n; i++){
+          //#pragma omp task depend(inout:tmp_kprod[m][n],tmp_kprod[m][n + i])
+          {
+            cblas_daxpy(y->r[d], 1.0, tmp_kprod[m][n + i], 1, tmp_kprod[m][i], 1);
+            free(tmp_kprod[m][n + i]);
+          }
+        }
+      }
+      //#pragma omp task depend(in:tmp_kprod[m][0],tmp_kprod[m][1])
+      {
+        cblas_daxpy(y->r[d], 1.0, tmp_kprod[m][0], 1, tmp_kprod[m][1], 1);
+        free(tmp_kprod[m][1]);
+        free(tmp_kprod[m]);
+      }
+    }
+    }// omp single
+    }// omp parallel
+    free(tmp_kprod);
   }
 }
