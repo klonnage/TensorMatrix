@@ -143,7 +143,7 @@ void multiplyTTMatVec(
   }
   y->data = (double *)malloc(y->dimVecBegin[y->d] * sizeof(y->data[0]));
   memset(y->data, 0, y->dimVecBegin[y->d] * sizeof(y->data[0]));
-
+  int size_data = y->dimVecBegin[y->d] * sizeof(y->data[0]);
 
   for (int d = 0; d < y->d; d++) {
     double*** tmp_kprod = (double***)malloc(A->m[d] * sizeof(double*));
@@ -157,15 +157,10 @@ void multiplyTTMatVec(
         for (int n = 0; n < A->n[d]; n++) {
         //#pragma omp task depend(out:tmp_kprod[m][n+1])
         {
-          printf("y->r[d] : %d\n", y->r[d]);
-          tmp_kprod[m][n+1] == NULL;
-          tmp_kprod[m][n+1] = (double*)malloc(y->r[d] * sizeof(double));
-          if(tmp_kprod[m][n+1] == NULL) printf("NO\n");
-          printf("%p\n", tmp_kprod[m][n+1]);
+          tmp_kprod[m][n+1] = (double*)malloc(size_data);
           double *AmnBlockBegin = getTTMatBlock(A, d, m, n);
           double *xnBlockBegin = getTTVecBlock(x, d, n);
           multiplySetKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], tmp_kprod[m][n+1]);
-          printf("%p OK\n", tmp_kprod[m][n+1]);
         }
       }
     }
@@ -174,14 +169,16 @@ void multiplyTTMatVec(
         for(int i = 0; i < n; i++){
           //#pragma omp task depend(inout:tmp_kprod[m][n],tmp_kprod[m][n + i])
           {
-            cblas_daxpy(y->r[d], 1.0, tmp_kprod[m][n + i], 1, tmp_kprod[m][i], 1);
+            printf("%d %d %d\n", m, n, i);
+            cblas_daxpy(size_data, 1.0, tmp_kprod[m][n + i], 1, tmp_kprod[m][i], 1);
             free(tmp_kprod[m][n + i]);
           }
         }
       }
       //#pragma omp task depend(in:tmp_kprod[m][0],tmp_kprod[m][1])
       {
-        cblas_daxpy(y->r[d], 1.0, tmp_kprod[m][0], 1, tmp_kprod[m][1], 1);
+        printf("%d\n", m);
+        cblas_daxpy(size_data, 1.0, tmp_kprod[m][0], 1, tmp_kprod[m][1], 1);
         free(tmp_kprod[m][1]);
         free(tmp_kprod[m]);
       }
