@@ -143,21 +143,23 @@ void multiplyTTMatVec(
   }
   y->data = (double *)malloc(y->dimVecBegin[y->d] * sizeof(y->data[0]));
   memset(y->data, 0, y->dimVecBegin[y->d] * sizeof(y->data[0]));
-  int size_data = y->dimVecBegin[y->d] * sizeof(y->data[0]);
+  int size_data = sizeof(y->data[0]);
+  int length_data = y->dimVecBegin[y->d];
 
   for (int d = 0; d < y->d; d++) {
     double*** tmp_kprod = (double***)malloc(A->m[d] * sizeof(double*));
-    //#pragma omp parallel shared(tmp_kprod)
+    #pragma omp parallel shared(tmp_kprod, size_data, length_data, d)
     {
-    //#pragma omp single
+    #pragma omp single
     {
       for (int m = 0; m < A->m[d]; m++) {
         tmp_kprod[m] = (double**)malloc((A->n[d] + 1) * sizeof(double*));
         tmp_kprod[m][0] = getTTVecBlock(y, d, m);
         for (int n = 0; n < A->n[d]; n++) {
-        //#pragma omp task depend(out:tmp_kprod[m][n+1])
+        #pragma omp task depend(out:tmp_kprod[m][n+1])
         {
-          tmp_kprod[m][n+1] = (double*)malloc(size_data);
+          //printf("%d : %d %d kprod\n", omp_get_thread_num(), m, n);
+          tmp_kprod[m][n+1] = (double*)malloc(length_data * size_data);
           double *AmnBlockBegin = getTTMatBlock(A, d, m, n);
           double *xnBlockBegin = getTTVecBlock(x, d, n);
           multiplySetKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], tmp_kprod[m][n+1]);
@@ -165,20 +167,20 @@ void multiplyTTMatVec(
       }
     }
     for (int m = 0; m < A->m[d]; m++) {
-      for (int n = (A->n[d] + 2) / 2; n > 1; n /= 2) {
+      for (int n = (A->n[d] + 1) / 2; n > 1; n /= 2) {
         for(int i = 0; i < n; i++){
-          //#pragma omp task depend(inout:tmp_kprod[m][n],tmp_kprod[m][n + i])
+          #pragma omp task depend(inout:tmp_kprod[m][i],tmp_kprod[m][n + i])
           {
-            printf("%d %d %d\n", m, n, i);
-            cblas_daxpy(size_data, 1.0, tmp_kprod[m][n + i], 1, tmp_kprod[m][i], 1);
+            //printf("%d : %d %d %d %d red\n", omp_get_thread_num(), m, n, i, n + i);
+            cblas_daxpy(length_data, 1.0, tmp_kprod[m][n + i], 1, tmp_kprod[m][i], 1);
             free(tmp_kprod[m][n + i]);
           }
         }
       }
-      //#pragma omp task depend(in:tmp_kprod[m][0],tmp_kprod[m][1])
+      #pragma omp task depend(in:tmp_kprod[m][0],tmp_kprod[m][1])
       {
-        printf("%d\n", m);
-        cblas_daxpy(size_data, 1.0, tmp_kprod[m][0], 1, tmp_kprod[m][1], 1);
+        //printf("%d : %d last red_step\n", omp_get_thread_num(), m);
+        cblas_daxpy(length_data, 1.0, tmp_kprod[m][0], 1, tmp_kprod[m][1], 1);
         free(tmp_kprod[m][1]);
         free(tmp_kprod[m]);
       }
