@@ -2,8 +2,8 @@
 #include <cstdlib>
 #include <cstddef>
 #include <cstring>
-#include <strings.h>
 #include <omp.h>
+#include <mkl_cblas.h>
 #include "ttmat.h"
 
 void loadTTMat(
@@ -77,38 +77,6 @@ double *getTTMatBlock(
         mat->r[dim + 1]));
 }
 
-#if defined(SET_FIRST)
-void multiplyKronecker(
-    double *a,
-    int anrows,
-    int ancols,
-    double *b,
-    int bnrows,
-    int bncols,
-    double *c)
-{
-  size_t shift_an_bn = (size_t)(anrows * bnrows);
-  size_t shift_bn    = (size_t)(bnrows * bncols);
-//#pragma omp parallel for collapse(2) firstprivate(shift_an_bn, shift_bn, ancols, anrows, c, a, b)
-  for (int ja = 0; ja < ancols; ja++) {
-    for (int ia = 0; ia < anrows; ia++) {
-      double aelem = a[ia + ja * anrows];
-      size_t shift_an = (size_t)(ia + ja * anrows);
-      size_t shift_c  = shift_an * shift_bn;
-      for (int jb = 0; jb < bncols; jb++) {
-        for (int ib = 0; ib < bnrows; ib++) {
-          double belem = b[ib + jb * bnrows];
-          // size_t cElemIdx = (ia + ja * anrows) * (size_t)(bnrows * bncols) + ib + jb * (size_t)(anrows * bnrows);
-          size_t cElemIdx = shift_c + ib + jb * shift_an_bn;
-          c[cElemIdx] = aelem * belem;
-        }
-      }
-    }
-  }
-}
-#endif//SET_FIRST
-
-
 void multiplyAddKronecker(
     double *a,
     int anrows,
@@ -118,7 +86,6 @@ void multiplyAddKronecker(
     int bncols,
     double *c)
 {
-#if defined(BASIC)
   for (int ja = 0; ja < ancols; ja++) {
     for (int ia = 0; ia < anrows; ia++) {
       double aelem = a[ia + ja * anrows];
@@ -131,26 +98,30 @@ void multiplyAddKronecker(
       }
     }
   }
-#elif defined(INDEXES) || defined(SET_FIRST)
-  size_t shift_an_bn = (size_t)(anrows * bnrows);
-  size_t shift_bn    = (size_t)(bnrows * bncols);
-//#pragma omp parallel for collapse(2) firstprivate(shift_an_bn, shift_bn, ancols, anrows, c, a, b)
+}
+
+
+void multiplySetKronecker(
+    double *a,
+    int anrows,
+    int ancols,
+    double *b,
+    int bnrows,
+    int bncols,
+    double *c)
+{
   for (int ja = 0; ja < ancols; ja++) {
     for (int ia = 0; ia < anrows; ia++) {
       double aelem = a[ia + ja * anrows];
-      size_t shift_an = (size_t)(ia + ja * anrows);
-      size_t shift_c  = shift_an * shift_bn;
       for (int jb = 0; jb < bncols; jb++) {
         for (int ib = 0; ib < bnrows; ib++) {
           double belem = b[ib + jb * bnrows];
-          // size_t cElemIdx = (ia + ja * anrows) * (size_t)(bnrows * bncols) + ib + jb * (size_t)(anrows * bnrows);
-          size_t cElemIdx = shift_c + ib + jb * shift_an_bn;
-          c[cElemIdx] += aelem * belem;
+          size_t cElemIdx = (ia + ja * anrows) * (size_t)(bnrows * bncols) + ib + jb * (size_t)(anrows * bnrows);
+          c[cElemIdx] = aelem * belem;
         }
       }
     }
   }
-#endif//BASIC
 }
 
 void multiplyTTMatVec(
@@ -170,57 +141,52 @@ void multiplyTTMatVec(
     y->r[d + 1] = A->r[d + 1] * x->r[d + 1];
     y->dimVecBegin[d + 1] = y->dimVecBegin[d] + y->m[d] * y->r[d] * y->r[d + 1];
   }
-
   y->data = (double *)malloc(y->dimVecBegin[y->d] * sizeof(y->data[0]));
-#if defined(BASIC) || defined(INDEXES)
   memset(y->data, 0, y->dimVecBegin[y->d] * sizeof(y->data[0]));
-
-  // Now perform the matrix-vector multiplication in each dimension
-  #ifdef OMP1
-  #pragma omp parallel for firstprivate(y, A, x) schedule(dynamic)
-  #endif
-  #ifdef OMP_TASK1
-  #pragma omp parallel
-  #pragma omp single
-  #endif
-  for (int d = 0; d < y->d; d++) {
-    #ifdef OMP2
-    #pragma omp parallel for firstprivate(y, A, x, d) schedule(static)
-    #endif
-    for (int m = 0; m < A->m[d]; m++) {
-      double *ymBlockBegin = getTTVecBlock(y, d, m);
-      for (int n = 0; n < A->n[d]; n++) {
-        double *AmnBlockBegin = getTTMatBlock(A, d, m, n);
-        double *xnBlockBegin = getTTVecBlock(x, d, n);
-        #ifdef OMP_TASK1
-        #pragma omp task
-        #endif
-        multiplyAddKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], ymBlockBegin);
-      }
-    }
-  }
-#elif defined(SET_FIRST)
-  /* Don't set to 0 but first kronecker product will be a set, not a sum */
-
-  // Now perform the matrix-vector multiplication in each dimension
+  int size_data = sizeof(y->data[0]);
+  int length_data = y->dimVecBegin[y->d];
 
   for (int d = 0; d < y->d; d++) {
-    for (int m = 0; m < A->m[d]; m++) {
-      double *ymBlockBegin = getTTVecBlock(y, d, m);
-
-      /* Set before add (n = 0) */
-      double *AmnBlockBegin = getTTMatBlock(A, d, m, 0);
-      double *xnBlockBegin = getTTVecBlock(x, d, 0);
-      multiplyKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], ymBlockBegin);
-
-      for (int n = 1; n < A->n[d]; n++) {
-        AmnBlockBegin = getTTMatBlock(A, d, m, n);
-        xnBlockBegin = getTTVecBlock(x, d, n);
-        multiplyAddKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], ymBlockBegin);
+    double*** tmp_kprod = (double***)malloc(A->m[d] * sizeof(double*));
+    #pragma omp parallel shared(tmp_kprod, size_data, length_data, d)
+    {
+    #pragma omp single
+    {
+      for (int m = 0; m < A->m[d]; m++) {
+        tmp_kprod[m] = (double**)malloc((A->n[d] + 1) * sizeof(double*));
+        tmp_kprod[m][0] = getTTVecBlock(y, d, m);
+        for (int n = 0; n < A->n[d]; n++) {
+        #pragma omp task depend(out:tmp_kprod[m][n+1])
+        {
+          //printf("%d : %d %d kprod\n", omp_get_thread_num(), m, n);
+          tmp_kprod[m][n+1] = (double*)malloc(length_data * size_data);
+          double *AmnBlockBegin = getTTMatBlock(A, d, m, n);
+          double *xnBlockBegin = getTTVecBlock(x, d, n);
+          multiplySetKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], tmp_kprod[m][n+1]);
+        }
       }
     }
+    for (int m = 0; m < A->m[d]; m++) {
+      for (int n = (A->n[d] + 1) / 2; n > 1; n /= 2) {
+        for(int i = 0; i < n; i++){
+          #pragma omp task depend(inout:tmp_kprod[m][i],tmp_kprod[m][n + i])
+          {
+            //printf("%d : %d %d %d %d red\n", omp_get_thread_num(), m, n, i, n + i);
+            cblas_daxpy(length_data, 1.0, tmp_kprod[m][n + i], 1, tmp_kprod[m][i], 1);
+            free(tmp_kprod[m][n + i]);
+          }
+        }
+      }
+      #pragma omp task depend(in:tmp_kprod[m][0],tmp_kprod[m][1])
+      {
+        //printf("%d : %d last red_step\n", omp_get_thread_num(), m);
+        cblas_daxpy(length_data, 1.0, tmp_kprod[m][0], 1, tmp_kprod[m][1], 1);
+        free(tmp_kprod[m][1]);
+        free(tmp_kprod[m]);
+      }
+    }
+    }// omp single
+    }// omp parallel
+    free(tmp_kprod);
   }
-#endif
-
-
 }
