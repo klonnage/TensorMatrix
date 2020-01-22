@@ -1,7 +1,7 @@
 CPP_FLAGS=-O3 -g -march=native -mtune=native -std=c++11 -fopenmp -mavx
 #CPP_FLAGS += -DOMP_TASK1
 CPP_FLAGS += -L${MKLROOT}/lib/intel64 -Wl,--no-as-needed -lmkl_intel_ilp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl
-SRC_TTMAT = ttmat_omp.cpp
+SRC_TTMAT = ttmat.cpp
 
 all: create-ttmat create-ttvec compare-ttvec ttmatvec
 
