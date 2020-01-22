@@ -2,6 +2,8 @@
 #include <cstdlib>
 #include <cstddef>
 #include <cstring>
+#include <strings.h>
+#include <omp.h>
 #include "ttmat.h"
 
 void loadTTMat(
@@ -75,6 +77,38 @@ double *getTTMatBlock(
         mat->r[dim + 1]));
 }
 
+#if defined(SET_FIRST)
+void multiplyKronecker(
+    double *a,
+    int anrows,
+    int ancols,
+    double *b,
+    int bnrows,
+    int bncols,
+    double *c)
+{
+  size_t shift_an_bn = (size_t)(anrows * bnrows);
+  size_t shift_bn    = (size_t)(bnrows * bncols);
+//#pragma omp parallel for collapse(2) firstprivate(shift_an_bn, shift_bn, ancols, anrows, c, a, b)
+  for (int ja = 0; ja < ancols; ja++) {
+    for (int ia = 0; ia < anrows; ia++) {
+      double aelem = a[ia + ja * anrows];
+      size_t shift_an = (size_t)(ia + ja * anrows);
+      size_t shift_c  = shift_an * shift_bn;
+      for (int jb = 0; jb < bncols; jb++) {
+        for (int ib = 0; ib < bnrows; ib++) {
+          double belem = b[ib + jb * bnrows];
+          // size_t cElemIdx = (ia + ja * anrows) * (size_t)(bnrows * bncols) + ib + jb * (size_t)(anrows * bnrows);
+          size_t cElemIdx = shift_c + ib + jb * shift_an_bn;
+          c[cElemIdx] = aelem * belem;
+        }
+      }
+    }
+  }
+}
+#endif//SET_FIRST
+
+
 void multiplyAddKronecker(
     double *a,
     int anrows,
@@ -84,7 +118,7 @@ void multiplyAddKronecker(
     int bncols,
     double *c)
 {
-#ifdef BASIC
+#if defined(BASIC)
   for (int ja = 0; ja < ancols; ja++) {
     for (int ia = 0; ia < anrows; ia++) {
       double aelem = a[ia + ja * anrows];
@@ -97,9 +131,10 @@ void multiplyAddKronecker(
       }
     }
   }
-#else
+#elif defined(INDEXES) || defined(SET_FIRST)
   size_t shift_an_bn = (size_t)(anrows * bnrows);
   size_t shift_bn    = (size_t)(bnrows * bncols);
+//#pragma omp parallel for collapse(2) firstprivate(shift_an_bn, shift_bn, ancols, anrows, c, a, b)
   for (int ja = 0; ja < ancols; ja++) {
     for (int ia = 0; ia < anrows; ia++) {
       double aelem = a[ia + ja * anrows];
@@ -135,10 +170,13 @@ void multiplyTTMatVec(
     y->r[d + 1] = A->r[d + 1] * x->r[d + 1];
     y->dimVecBegin[d + 1] = y->dimVecBegin[d] + y->m[d] * y->r[d] * y->r[d + 1];
   }
-  y->data = (double *)malloc(y->dimVecBegin[y->d] * sizeof(y->data[0]));
-  memset(y->data, 0, y->dimVecBegin[y->d] * sizeof(y->data[0]));
 
+  y->data = (double *)malloc(y->dimVecBegin[y->d] * sizeof(y->data[0]));
+#if defined(BASIC) || defined(INDEXES)
+  memset(y->data, 0, y->dimVecBegin[y->d] * sizeof(y->data[0]));
+  
   // Now perform the matrix-vector multiplication in each dimension
+
   for (int d = 0; d < y->d; d++) {
     for (int m = 0; m < A->m[d]; m++) {
       double *ymBlockBegin = getTTVecBlock(y, d, m);
@@ -149,4 +187,28 @@ void multiplyTTMatVec(
       }
     }
   }
+#elif defined(SET_FIRST)
+  /* Don't set to 0 but first kronecker product will be a set, not a sum */
+
+  // Now perform the matrix-vector multiplication in each dimension
+
+  for (int d = 0; d < y->d; d++) {
+    for (int m = 0; m < A->m[d]; m++) {
+      double *ymBlockBegin = getTTVecBlock(y, d, m);
+
+      /* Set before add (n = 0) */
+      double *AmnBlockBegin = getTTMatBlock(A, d, m, 0);
+      double *xnBlockBegin = getTTVecBlock(x, d, 0);
+      multiplyKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], ymBlockBegin);        
+
+      for (int n = 1; n < A->n[d]; n++) {
+        AmnBlockBegin = getTTMatBlock(A, d, m, n);
+        xnBlockBegin = getTTVecBlock(x, d, n);
+        multiplyAddKronecker(AmnBlockBegin, A->r[d], A->r[d + 1], xnBlockBegin, x->r[d], x->r[d + 1], ymBlockBegin);
+      }
+    }
+  }
+#endif
+
+
 }
