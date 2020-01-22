@@ -19,8 +19,6 @@ compare-ttvec: compare-ttvec.cpp ttvec.cpp
 
 clean:
 	rm -f ttmatvec create-ttmat create-ttvec compare-ttvec
-<<<<<<< HEAD
-=======
 
 N = 1024
 R = 8#64
@@ -35,4 +33,3 @@ test: clean all
 	export OMP_NUM_THREADS=$(NB_THREADS)
 	./ttmatvec -a ttmat.bin -x ttvec.bin -y test.bin
 	./compare-ttvec -x res.bin -y test.bin
->>>>>>> e31cced1b059d9629fba46bab2efe8d0deb32ec0
